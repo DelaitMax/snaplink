@@ -1,0 +1,154 @@
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+
+stages:
+  - lint
+  - test
+  - build
+  - deploy
+
+variables:
+  NODE_VERSION: "22"
+
+.node_backend:
+  image: node:${NODE_VERSION}-alpine
+  cache:
+    key:
+      files:
+        - backend/package-lock.json
+    paths:
+      - backend/node_modules/
+  before_script:
+    - cd backend
+    - npm ci
+
+.node_frontend:
+  image: node:${NODE_VERSION}-alpine
+  cache:
+    key:
+      files:
+        - frontend/package-lock.json
+    paths:
+      - frontend/node_modules/
+  before_script:
+    - cd frontend
+    - npm ci
+
+# ---------- backend ----------
+
+lint-and-typecheck-backend:
+  extends: .node_backend
+  stage: lint
+  script:
+    - npm run typecheck
+    - npm run typecheck:tests
+    - npm run lint
+
+test-backend:
+  extends: .node_backend
+  stage: test
+  services:
+    - name: postgres:16-alpine
+      alias: postgres
+    - name: redis:7-alpine
+      alias: redis
+  variables:
+    POSTGRES_DB: snaplink_test
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: postgres
+    NODE_ENV: test
+    DATABASE_URL: postgres://postgres:postgres@postgres:5432/snaplink_test
+    REDIS_URL: redis://redis:6379
+    JWT_SECRET: ci-test-secret-at-least-32-characters-long-1234
+    ADMIN_EMAIL: admin@example.com
+    ADMIN_PASSWORD: CiTestPassword123
+    # Заведомо закрытый порт — geo-lookup сразу падает с ECONNREFUSED вместо
+    # похода в реальный ip-api.com (недоступен в тестовом окружении и
+    # замедлил бы тесты до GEO_LOOKUP_TIMEOUT_MS на каждый клик).
+    GEO_API_BASE_URL: http://127.0.0.1:19999/json
+  before_script:
+    - cd backend
+    - npm ci
+
+    - apk add --no-cache postgresql-client
+    - |
+      i=0
+      until pg_isready -h postgres -p 5432 -U "$POSTGRES_USER"; do
+        i=$((i + 1))
+        if [ "$i" -ge 30 ]; then
+          echo "Postgres did not become ready in time"
+          exit 1
+        fi
+        echo "Waiting for postgres... ($i/30)"
+        sleep 2
+      done
+  script:
+    - npm test
+
+build-image-backend:
+  stage: build
+  needs: [lint-and-typecheck-backend, test-backend]
+  image: docker:27
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  script:
+    - docker build -t snaplink-backend:ci backend
+
+# ---------- frontend ----------
+
+lint-and-typecheck-frontend:
+  extends: .node_frontend
+  stage: lint
+  script:
+    - npm run lint
+    - npm run build
+
+test-frontend:
+  extends: .node_frontend
+  stage: test
+  script:
+    - npm test
+
+# ---------- deploy ----------
+
+#   VPS_HOST — адрес/домен сервера
+#   VPS_USER — пользователь для SSH
+#   VPS_SSH_KEY — приватный ключ с доступом на сервер
+#   VPS_PATH — абсолютный путь к уже склонированному репозиторию на сервере
+deploy:
+  stage: deploy
+  needs: [build-image-backend, lint-and-typecheck-frontend, test-frontend]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: never
+    - if: $CI_COMMIT_BRANCH == "main"
+  image: alpine:3.20
+  before_script:
+    - apk add --no-cache openssh-client
+    - eval $(ssh-agent -s)
+    - echo "$VPS_SSH_KEY" | base64 -d | ssh-add -
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts
+  script:
+    - |
+      ssh "$VPS_USER@$VPS_HOST" bash -s <<REMOTE_SCRIPT
+      set -euo pipefail
+      cd "$VPS_PATH"
+      git fetch origin main
+      git reset --hard origin/main
+
+      if [ ! -f .env ]; then
+        echo ".env missing on $VPS_PATH" >&2
+        exit 1
+      fi
+
+      docker compose -f docker-compose.yml -f docker-compose.prod.yml build
+      docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
+      docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm backend node dist/db/migrate.js
+      docker image prune -f
+      REMOTE_SCRIPT

@@ -1,10 +1,10 @@
 import { Router } from "express";
-import { requireAuth } from "@/middleware/auth.middleware";
+import { requireAdmin, requireAuth } from "@/middleware/auth.middleware";
 import { exportGlobalClicks, globalStats, listLinks } from "@/controllers/admin.controller";
 
 export const adminRouter = Router();
 
-adminRouter.use(requireAuth);
+adminRouter.use(requireAuth, requireAdmin);
 
 adminRouter.get("/links", listLinks);
 adminRouter.get("/stats", globalStats);

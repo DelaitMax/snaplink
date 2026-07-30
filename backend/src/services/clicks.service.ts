@@ -69,7 +69,7 @@ export async function listClicksForLink(
 ): Promise<PaginatedResult<ClickListItem>> {
   const where = and(eq(clicks.linkId, linkId), eq(clicks.isBot, false));
 
-  const [items, [{ total }]] = await Promise.all([
+  const [items, totalRow] = await Promise.all([
     db
       .select(CLICK_LIST_COLUMNS)
       .from(clicks)
@@ -80,7 +80,7 @@ export async function listClicksForLink(
     db.select({ total: count() }).from(clicks).where(where),
   ]);
 
-  return buildPaginatedResult(items, total, page, pageSize);
+  return buildPaginatedResult(items, totalOf(totalRow), page, pageSize);
 }
 
 export interface ClickByDay {
@@ -93,19 +93,38 @@ export interface DeviceBreakdown {
   count: number;
 }
 
+export interface BrowserBreakdown {
+  browser: string | null;
+  count: number;
+}
+
+export interface OsBreakdown {
+  os: string | null;
+  count: number;
+}
+
 export interface LinkStatsAggregates {
   totalClicks: number;
   clicksByDay: ClickByDay[];
   deviceBreakdown: DeviceBreakdown[];
+  browserBreakdown: BrowserBreakdown[];
+  osBreakdown: OsBreakdown[];
 }
 
 const DAY_TRUNC = sql`date_trunc('day', ${clicks.clickedAt})`;
+
+// COUNT(*) без GROUP BY всегда возвращает ровно одну строку, но с
+// noUncheckedIndexedAccess индексирование массива типизируется как T | undefined —
+// достаём значение через этот хелпер вместо небезопасного rows[0].total.
+function totalOf(rows: Array<{ total: number }>): number {
+  return rows[0]?.total ?? 0;
+}
 
 export async function getLinkStatsAggregates(linkId: number, sinceDays = 30): Promise<LinkStatsAggregates> {
   const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000);
   const baseWhere = and(eq(clicks.linkId, linkId), eq(clicks.isBot, false));
 
-  const [totalRow, byDayRows, deviceRows] = await Promise.all([
+  const [totalRow, byDayRows, deviceRows, browserRows, osRows] = await Promise.all([
     db.select({ total: count() }).from(clicks).where(baseWhere),
     db
       .select({ day: sql<string>`to_char(${DAY_TRUNC}, 'YYYY-MM-DD')`, count: count() })
@@ -118,12 +137,26 @@ export async function getLinkStatsAggregates(linkId: number, sinceDays = 30): Pr
       .from(clicks)
       .where(baseWhere)
       .groupBy(clicks.deviceType),
+    db
+      .select({ browser: clicks.browser, count: count() })
+      .from(clicks)
+      .where(baseWhere)
+      .groupBy(clicks.browser)
+      .orderBy(desc(count())),
+    db
+      .select({ os: clicks.os, count: count() })
+      .from(clicks)
+      .where(baseWhere)
+      .groupBy(clicks.os)
+      .orderBy(desc(count())),
   ]);
 
   return {
-    totalClicks: totalRow[0].total,
+    totalClicks: totalOf(totalRow),
     clicksByDay: byDayRows,
     deviceBreakdown: deviceRows,
+    browserBreakdown: browserRows,
+    osBreakdown: osRows,
   };
 }
 
@@ -132,6 +165,8 @@ export interface GlobalStats {
   totalClicks: number;
   clicksByDay: ClickByDay[];
   deviceBreakdown: DeviceBreakdown[];
+  browserBreakdown: BrowserBreakdown[];
+  osBreakdown: OsBreakdown[];
   topLinks: Array<{ shortCode: string; originalUrl: string; clicks: number }>;
 }
 
@@ -139,7 +174,7 @@ export async function getGlobalStats(sinceDays = 30, topLinksLimit = 10): Promis
   const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000);
   const nonBot = eq(clicks.isBot, false);
 
-  const [totalLinksRow, totalClicksRow, byDayRows, deviceRows, topLinksRows] = await Promise.all([
+  const [totalLinksRow, totalClicksRow, byDayRows, deviceRows, browserRows, osRows, topLinksRows] = await Promise.all([
     db.select({ total: count() }).from(links),
     db.select({ total: count() }).from(clicks).where(nonBot),
     db
@@ -149,6 +184,13 @@ export async function getGlobalStats(sinceDays = 30, topLinksLimit = 10): Promis
       .groupBy(DAY_TRUNC)
       .orderBy(DAY_TRUNC),
     db.select({ deviceType: clicks.deviceType, count: count() }).from(clicks).where(nonBot).groupBy(clicks.deviceType),
+    db
+      .select({ browser: clicks.browser, count: count() })
+      .from(clicks)
+      .where(nonBot)
+      .groupBy(clicks.browser)
+      .orderBy(desc(count())),
+    db.select({ os: clicks.os, count: count() }).from(clicks).where(nonBot).groupBy(clicks.os).orderBy(desc(count())),
     db
       .select({
         shortCode: links.shortCode,
@@ -163,10 +205,12 @@ export async function getGlobalStats(sinceDays = 30, topLinksLimit = 10): Promis
   ]);
 
   return {
-    totalLinks: totalLinksRow[0].total,
-    totalClicks: totalClicksRow[0].total,
+    totalLinks: totalOf(totalLinksRow),
+    totalClicks: totalOf(totalClicksRow),
     clicksByDay: byDayRows,
     deviceBreakdown: deviceRows,
+    browserBreakdown: browserRows,
+    osBreakdown: osRows,
     topLinks: topLinksRows,
   };
 }

@@ -117,8 +117,9 @@ test-frontend:
 
 #   VPS_HOST — адрес/домен сервера
 #   VPS_USER — пользователь для SSH
-#   VPS_SSH_KEY — приватный ключ с доступом на сервер
+#   VPS_SSH_KEY — приватный ключ с доступом на сервер (base64, ssh-add -d)
 #   VPS_PATH — абсолютный путь к уже склонированному репозиторию на сервере
+#   VPS_SSH_PORT — (опционально) порт sshd на сервере, если отличается от 22
 deploy:
   stage: deploy
   needs: [build-image-backend, lint-and-typecheck-frontend, test-frontend]
@@ -127,16 +128,18 @@ deploy:
       when: never
     - if: $CI_COMMIT_BRANCH == "main"
   image: alpine:3.20
+  variables:
+    VPS_SSH_PORT: "22"
   before_script:
     - apk add --no-cache openssh-client
     - eval $(ssh-agent -s)
     - echo "$VPS_SSH_KEY" | base64 -d | ssh-add -
     - mkdir -p ~/.ssh
     - chmod 700 ~/.ssh
-    - ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts
+    - ssh-keyscan -p "$VPS_SSH_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts
   script:
     - |
-      ssh "$VPS_USER@$VPS_HOST" bash -s <<REMOTE_SCRIPT
+      ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" bash -s <<REMOTE_SCRIPT
       set -euo pipefail
       cd "$VPS_PATH"
       git fetch origin main

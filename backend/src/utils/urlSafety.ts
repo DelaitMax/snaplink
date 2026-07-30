@@ -46,7 +46,7 @@ function isBlockedIp(ip: string): boolean {
   if (net.isIPv4(ip)) return isBlockedIpv4(ip);
   if (net.isIPv6(ip)) {
     const mapped = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
-    if (mapped) return isBlockedIpv4(mapped[1]);
+    if (mapped) return isBlockedIpv4(mapped[1] ?? ip);
     return isBlockedIpv6(ip);
   }
   return false;

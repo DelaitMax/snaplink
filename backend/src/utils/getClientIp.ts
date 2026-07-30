@@ -6,7 +6,7 @@ const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1"]);
 function normalizeIp(ip: string): string {
   const trimmed = ip.trim();
   const mapped = trimmed.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
-  return mapped ? mapped[1] : trimmed;
+  return mapped?.[1] ?? trimmed;
 }
 
 function headerValue(header: string | string[] | undefined): string | undefined {

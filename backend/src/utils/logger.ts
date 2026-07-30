@@ -1,24 +1,22 @@
-type LogLevel = "info" | "warn" | "error";
+import pino from "pino";
+import { env } from "@/config/env";
+
 type LogMeta = Record<string, unknown>;
 
-function write(level: LogLevel, message: string, meta?: LogMeta): void {
-  const payload = {
-    level,
-    message,
-    timestamp: new Date().toISOString(),
-    ...meta,
-  };
-
-  const line = JSON.stringify(payload);
-
-  if (level === "error") console.error(line);
-  else if (level === "warn") console.warn(line);
-  // eslint-disable-next-line no-console
-  else console.log(line);
-}
+const pinoLogger = pino({
+  level: env.LOG_LEVEL,
+  ...(env.NODE_ENV === "development"
+    ? {
+        transport: {
+          target: "pino-pretty",
+          options: { colorize: true, translateTime: "HH:MM:ss", ignore: "pid,hostname" },
+        },
+      }
+    : {}),
+});
 
 export const logger = {
-  info: (message: string, meta?: LogMeta): void => write("info", message, meta),
-  warn: (message: string, meta?: LogMeta): void => write("warn", message, meta),
-  error: (message: string, meta?: LogMeta): void => write("error", message, meta),
+  info: (message: string, meta?: LogMeta): void => pinoLogger.info(meta ?? {}, message),
+  warn: (message: string, meta?: LogMeta): void => pinoLogger.warn(meta ?? {}, message),
+  error: (message: string, meta?: LogMeta): void => pinoLogger.error(meta ?? {}, message),
 };

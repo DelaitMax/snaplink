@@ -8,7 +8,9 @@ export class AppError extends Error {
     this.name = "AppError";
     this.statusCode = statusCode;
     this.isOperational = true;
-    this.code = code;
+    if (code !== undefined) {
+      this.code = code;
+    }
 
     Object.setPrototypeOf(this, AppError.prototype);
   }
@@ -19,6 +21,10 @@ export class AppError extends Error {
 
   static unauthorized(message: string, code?: string): AppError {
     return new AppError(message, 401, code);
+  }
+
+  static forbidden(message: string, code?: string): AppError {
+    return new AppError(message, 403, code);
   }
 
   static notFound(message: string, code?: string): AppError {

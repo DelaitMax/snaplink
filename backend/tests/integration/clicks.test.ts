@@ -46,6 +46,8 @@ describe("Clicks / stats API", () => {
     const stats = await request(app).get(`/api/links/${statsToken}/stats`);
     expect(stats.body.stats.totalClicks).toBe(1);
     expect(stats.body.stats.deviceBreakdown).toEqual([{ deviceType: "desktop", count: 1 }]);
+    expect(stats.body.stats.browserBreakdown).toEqual([{ browser: "Chrome", count: 1 }]);
+    expect(stats.body.stats.osBreakdown).toEqual([{ os: "Windows", count: 1 }]);
   });
 
   it("paginates the click list for a link", async () => {

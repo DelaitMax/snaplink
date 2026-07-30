@@ -8,6 +8,7 @@ import { redirectCacheKey } from "@/services/links.service";
 import { cacheDel } from "@/lib/redis";
 import { buildTestApp } from "./helpers/testApp";
 import { closeDb, runMigrations, truncateAll } from "./helpers/db";
+import { extractSetCookie } from "./helpers/auth";
 
 describe("Links API", () => {
   const app = buildTestApp();
@@ -71,7 +72,7 @@ describe("Links API", () => {
     const create = await request(app).post("/api/links").send({ url: "https://example.com/target", alias: "redir1" });
     const res = await request(app).get(`/${create.body.shortCode}`);
     expect(res.status).toBe(302);
-    expect(res.headers.location).toBe("https://example.com/target");
+    expect(res.headers["location"]).toBe("https://example.com/target");
   });
 
   it("returns 404 for an unknown short code", async () => {
@@ -88,10 +89,6 @@ describe("Links API", () => {
     const immediate = await request(app).get("/ttllink");
     expect(immediate.status).toBe(302);
 
-    // Вместо реального ожидания TTL (флаky под нагрузкой параллельных тестов)
-    // детерминированно переносим expiresAt в прошлое напрямую в БД. "immediate"
-    // запрос выше уже закэшировал ссылку в Redis — инвалидируем кэш явно,
-    // иначе resolveLinkForRedirect отдаст устаревшее закэшированное значение.
     await db.update(links).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(links.shortCode, "ttllink"));
     await cacheDel(redirectCacheKey("ttllink"));
 
@@ -109,5 +106,40 @@ describe("Links API", () => {
 
     const res = await request(app).get("/deactme");
     expect(res.status).toBe(410);
+  });
+
+  it("requires auth for GET /api/links/mine", async () => {
+    const res = await request(app).get("/api/links/mine");
+    expect(res.status).toBe(401);
+  });
+
+  it("GET /api/links/mine returns only the current user's own links — anonymous links never appear there", async () => {
+    await request(app).post("/api/links").send({ url: "https://example.com/anon", alias: "anon-link" });
+
+    const registerA = await request(app)
+      .post("/auth/register")
+      .send({ email: "owner.a@example.com", password: "OwnerAPassword1" });
+    const cookieA = extractSetCookie(registerA);
+
+    const registerB = await request(app)
+      .post("/auth/register")
+      .send({ email: "owner.b@example.com", password: "OwnerBPassword1" });
+    const cookieB = extractSetCookie(registerB);
+
+    const createByA = await request(app)
+      .post("/api/links")
+      .set("Cookie", cookieA)
+      .send({ url: "https://example.com/owned-by-a", alias: "owned-by-a" });
+    expect(createByA.status).toBe(201);
+
+    const mineA = await request(app).get("/api/links/mine").set("Cookie", cookieA);
+    expect(mineA.status).toBe(200);
+    expect(mineA.body.items).toHaveLength(1);
+    expect(mineA.body.items[0].shortCode).toBe("owned-by-a");
+    expect(mineA.body.items[0].statsToken).toBeTruthy();
+
+    const mineB = await request(app).get("/api/links/mine").set("Cookie", cookieB);
+    expect(mineB.status).toBe(200);
+    expect(mineB.body.items).toHaveLength(0);
   });
 });

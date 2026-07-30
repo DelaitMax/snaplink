@@ -3,7 +3,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
 import { buildTestApp } from "./helpers/testApp";
 import { closeDb, runMigrations, truncateAll } from "./helpers/db";
-import { seedAdminUser } from "./helpers/auth";
+import { extractSetCookie, seedAdminUser } from "./helpers/auth";
 
 describe("Admin API", () => {
   const app = buildTestApp();
@@ -28,10 +28,24 @@ describe("Admin API", () => {
     expect(stats.status).toBe(401);
   });
 
+  it("rejects /api/admin/* for an authenticated regular (non-admin) user", async () => {
+    const register = await request(app)
+      .post("/auth/register")
+      .send({ email: "regular.user@example.com", password: "RegularPassword1" });
+    const cookie = extractSetCookie(register);
+
+    const links = await request(app).get("/api/admin/links").set("Cookie", cookie);
+    expect(links.status).toBe(403);
+    expect(links.body.error.code).toBe("ADMIN_REQUIRED");
+
+    const stats = await request(app).get("/api/admin/stats").set("Cookie", cookie);
+    expect(stats.status).toBe(403);
+  });
+
   it("lists links with pagination once authenticated", async () => {
     const { email, password } = await seedAdminUser();
     const login = await request(app).post("/auth/login").send({ email, password });
-    const cookie = login.headers["set-cookie"][0];
+    const cookie = extractSetCookie(login);
 
     await request(app).post("/api/links").send({ url: "https://example.com/1", alias: "adminlink1" });
     await request(app).post("/api/links").send({ url: "https://example.com/2", alias: "adminlink2" });
@@ -46,7 +60,7 @@ describe("Admin API", () => {
   it("returns global stats shape once authenticated", async () => {
     const { email, password } = await seedAdminUser();
     const login = await request(app).post("/auth/login").send({ email, password });
-    const cookie = login.headers["set-cookie"][0];
+    const cookie = extractSetCookie(login);
 
     const res = await request(app).get("/api/admin/stats").set("Cookie", cookie);
     expect(res.status).toBe(200);
@@ -55,6 +69,8 @@ describe("Admin API", () => {
       totalClicks: expect.any(Number),
       clicksByDay: expect.any(Array),
       deviceBreakdown: expect.any(Array),
+      browserBreakdown: expect.any(Array),
+      osBreakdown: expect.any(Array),
       topLinks: expect.any(Array),
     });
   });

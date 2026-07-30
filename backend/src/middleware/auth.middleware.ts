@@ -1,11 +1,12 @@
 import type { NextFunction, Request, Response } from "express";
 import { env } from "@/config/env";
 import { AppError } from "@/utils/AppError";
-import { verifyAuthToken } from "@/utils/jwt";
+import { verifyAuthToken, type UserRole } from "@/utils/jwt";
 
 export interface AuthenticatedUser {
   id: number;
   email: string;
+  role: UserRole;
 }
 
 declare module "express-serve-static-core" {
@@ -28,6 +29,26 @@ export function requireAuth(req: Request, _res: Response, next: NextFunction): v
     return;
   }
 
-  req.user = { id: payload.sub, email: payload.email };
+  req.user = { id: payload.sub, email: payload.email, role: payload.role };
+  next();
+}
+
+export function optionalAuth(req: Request, _res: Response, next: NextFunction): void {
+  const token = req.cookies?.[env.JWT_COOKIE_NAME] as string | undefined;
+  if (token) {
+    const payload = verifyAuthToken(token);
+    if (payload) {
+      req.user = { id: payload.sub, email: payload.email, role: payload.role };
+    }
+  }
+  next();
+}
+
+// requireAuth должен идти перед requireAdmin в цепочке роутов
+export function requireAdmin(req: Request, _res: Response, next: NextFunction): void {
+  if (req.user?.role !== "admin") {
+    next(AppError.forbidden("Admin access required", "ADMIN_REQUIRED"));
+    return;
+  }
   next();
 }

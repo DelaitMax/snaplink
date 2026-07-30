@@ -3,7 +3,7 @@ import { env } from "@/config/env";
 import * as authService from "@/services/auth.service";
 import { AppError } from "@/utils/AppError";
 import { signAuthToken } from "@/utils/jwt";
-import { loginSchema } from "@/schemas/auth.schema";
+import { loginSchema, registerSchema } from "@/schemas/auth.schema";
 
 function cookieOptions(): CookieOptions {
   return {
@@ -20,10 +20,24 @@ export async function login(req: Request, res: Response, next: NextFunction): Pr
     const { email, password } = loginSchema.parse(req.body);
     const user = await authService.authenticate(email, password);
 
-    const token = signAuthToken({ sub: user.id, email: user.email });
+    const token = signAuthToken({ sub: user.id, email: user.email, role: user.role });
     res.cookie(env.JWT_COOKIE_NAME, token, cookieOptions());
 
-    res.json({ id: user.id, email: user.email });
+    res.json({ id: user.id, email: user.email, role: user.role });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function register(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { email, password } = registerSchema.parse(req.body);
+    const user = await authService.registerUser(email, password);
+
+    const token = signAuthToken({ sub: user.id, email: user.email, role: user.role });
+    res.cookie(env.JWT_COOKIE_NAME, token, cookieOptions());
+
+    res.status(201).json({ id: user.id, email: user.email, role: user.role });
   } catch (err) {
     next(err);
   }
@@ -45,7 +59,7 @@ export async function me(req: Request, res: Response, next: NextFunction): Promi
       throw AppError.unauthorized("User no longer exists", "USER_NOT_FOUND");
     }
 
-    res.json({ id: user.id, email: user.email });
+    res.json({ id: user.id, email: user.email, role: user.role });
   } catch (err) {
     next(err);
   }

@@ -17,11 +17,11 @@ async function run(): Promise<void> {
   const existing = await db.query.users.findFirst({ where: eq(users.email, email) });
 
   if (existing) {
-    await db.update(users).set({ passwordHash }).where(eq(users.id, existing.id));
+    await db.update(users).set({ passwordHash, role: "admin" }).where(eq(users.id, existing.id));
     // eslint-disable-next-line no-console
     console.log(`Updated password for existing user: ${email}`);
   } else {
-    await db.insert(users).values({ email, passwordHash });
+    await db.insert(users).values({ email, passwordHash, role: "admin" });
     // eslint-disable-next-line no-console
     console.log(`Created user: ${email}`);
   }

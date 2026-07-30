@@ -22,6 +22,13 @@
       "when": 1784725206332,
       "tag": "0002_silent_jamie_braddock",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785322203116,
+      "tag": "0003_multi_tenancy",
+      "breakpoints": true
     }
   ]
 }

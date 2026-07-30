@@ -1,6 +1,8 @@
 ## backend
 
-Node.js + Express + TypeScript API.
+Node.js + Express + TypeScript API сервиса сокращения ссылок:
+создание/редирект коротких ссылок, статистика переходов, аккаунты с
+ролями (`admin`/`user`) и "мои ссылки" для залогиненных пользователей.
 
 - `src/config/` — конфигурация приложения, валидация env через zod
 - `src/controllers/` — HTTP-контроллеры (тонкий слой над services)
@@ -13,155 +15,154 @@ Node.js + Express + TypeScript API.
 - `src/types/` — общие TypeScript-типы backend
 - `tests/` — автотесты
 
-### Что реализовано (шаг 1)
+### API
 
-- `POST /api/links` — создать короткую ссылку
-  - тело: `{ "url": "https://example.com", "alias"?: "my-code", "ttlSeconds"?: 3600 }`
-  - ответ: `{ shortCode, shareUrl, statsUrl, originalUrl, expiresAt, createdAt }`
-- `GET /:code` — публичный редирект по короткому коду (302)
-- `GET /api/links/:token/stats` — базовая информация по ссылке по `statsToken`
-  (полноценная аналитика — в следующих шагах)
-- `POST /api/links/:token/deactivate` — ручная деактивация ссылки по `statsToken`
+Публичное:
+- `GET /:code` — редирект по короткому коду (302)
+- `POST /api/links` — создать короткую ссылку; тело:
+  `{ "url": "https://example.com", "alias"?: "my-code", "ttlSeconds"?: 3600 }`;
+  ответ: `{ shortCode, shareUrl, statsUrl, originalUrl, expiresAt, createdAt }`.
+  Работает анонимно; если запрос пришёл с валидной сессией — ссылка
+  дополнительно привязывается к пользователю (см. "Аккаунты и роли" ниже)
+- `GET /api/links/:token/stats` — статистика по ссылке по `statsToken`
+  (капабилити-токен: доступ без логина, всем, у кого есть ссылка)
+- `GET /api/links/:token/clicks` / `GET /api/links/:token/clicks/export` —
+  пагинированная история переходов и её CSV-экспорт
+- `POST /api/links/:token/deactivate` — ручная деактивация ссылки
 - `GET /health` — health-check
-- Валидация URL + защита от SSRF (`src/utils/urlSafety.ts`): блокируются
-  `localhost`, loopback/private/link-local IPv4- и IPv6-диапазоны, в том числе
-  по итогам DNS-резолва домена (защита от DNS rebinding)
-- Модель `links` в PostgreSQL через Drizzle ORM (`src/db/schema/links.ts`)
-- Кастомные алиасы (с проверкой занятости и списком зарезервированных слов)
-- TTL (`ttlSeconds` при создании) и ручная деактивация (`isActive`)
 
-### Что реализовано (шаг 2)
+Аутентификация:
+- `POST /auth/register` — самостоятельная регистрация (email + пароль),
+  сразу логинит; всегда создаёт роль `user`
+- `POST /auth/login` / `POST /auth/logout` — вход/выход (httpOnly-cookie с JWT)
+- `GET /auth/me` — текущий пользователь, требует сессию
 
-- Сервис-слой (`src/services/`) отдельно от контроллеров
-- `AppError` + централизованный `error.middleware.ts`: штатные ошибки
-  (`AppError`, `ZodError`) превращаются в предсказуемый JSON-ответ,
-  неожиданные — логируются со стеком через общий логгер
-- `logger.middleware.ts` — логирует каждый запрос после ответа
-  (`res.on('finish')`) с уровнем по статус-коду: `>=500` → error,
-  `>=400` → warn, иначе → info; структурированный JSON-лог
-  (`src/utils/logger.ts`)
-- Валидация входных данных (zod-схемы в `src/schemas/`) и env
-  (`src/config/env.ts`)
-- Rate limiting (`src/middleware/rateLimit.middleware.ts`,
-  `express-rate-limit`): глобальный лимит 100 запросов/мин на IP —
-  на весь API кроме `/health`; отдельный строгий лимит 10 запросов/15мин
-  на `/auth` (сами auth-роуты — отдельным шагом, лимитер подключён заранее)
-- `getClientIp` (`src/utils/getClientIp.ts`) — реальный IP с учётом
-  `X-Forwarded-For`/`X-Real-Ip` (актуально за прокси/докером),
-  нормализация IPv4-mapped IPv6-адресов (`::ffff:x.x.x.x`); при
-  localhost/unknown — `null` вместо падения запроса
+Требуют сессию:
+- `GET /api/links/mine` — ссылки текущего пользователя (в т.ч. `statsToken`
+  каждой — переход на её статистику без необходимости хранить токен отдельно)
+- `GET /api/admin/links`, `GET /api/admin/stats`, `GET /api/admin/stats/export`
+  — весь сервис целиком: список всех ссылок, глобальная статистика
+  (totalLinks, totalClicks, clicksByDay, deviceBreakdown, browserBreakdown,
+  osBreakdown, топ-10 ссылок по кликам) и её CSV-экспорт. Требуют роль `admin`
 
-### Что реализовано (шаг 3)
+### Аккаунты и роли
 
-- JWT в httpOnly-cookie (`auth_token`, `HttpOnly; SameSite=Lax`, TTL из
-  `JWT_EXPIRES_IN_SECONDS`)
-- `POST /auth/login` — email+пароль → cookie с JWT
-- `POST /auth/logout` — очищает cookie
-- `GET /auth/me` — защищён `requireAuth` (`src/middleware/auth.middleware.ts`);
-  без валидной сессии — 401
-- Разделение публичного трафика (`/:code` redirect, `/api/links` создание —
-  анонимны и остаются анонимными) и защищённых данных (`/auth/me`
-  требует сессию)
-- Таблица `users` (email + bcrypt-хэш пароля) через Drizzle ORM
-- Регистрация через API не предусмотрена (предусмотрены только
-  login/logout/me) — сервис одно-арендаторский: единственный
-  администратор создаётся/обновляется скриптом `npm run db:seed`
-  из `ADMIN_EMAIL`/`ADMIN_PASSWORD`
-- Пароли — bcrypt (`bcryptjs`, 12 раундов); одинаковый текст ошибки для
-  "нет такого email" и "неверный пароль", чтобы не давать возможность
-  перебором узнавать зарегистрированные email
+Два уровня доступа, независимых друг от друга:
 
-### Что реализовано (шаг 4; без фронтенда, только API)
+1. **`statsToken`** — капабилити-токен, выдаётся при создании ссылки и не
+   требует аккаунта: у кого есть ссылка на страницу статистики, у того есть
+   доступ к ней. Работает для всех ссылок, включая созданные анонимно.
+2. **Аккаунт** (`users.role`: `admin` | `user`, дефолт `user`) — поверх
+   первого уровня. Роль `admin` достижима только через `db/seed.ts`
+   (`ADMIN_EMAIL`/`ADMIN_PASSWORD`), самостоятельная регистрация её никогда
+   не выдаёт. Обычный `user` видит только свои ссылки (`GET /api/links/mine`,
+   фильтр по `links.userId`); `admin` — весь сервис (`/api/admin/*`,
+   `requireAdmin` middleware, для не-admin — 403).
 
-- Сбор данных о переходах (`clicks`): дата, IP (через `getClientIp`),
-  регион (geo), браузер+версия, ОС+версия, тип устройства, флаг бота
-- `ua-parser-js` — браузер/версия/ОС/тип устройства из User-Agent
+Пароли — bcrypt (`bcryptjs`, 12 раундов); один и тот же текст ошибки для
+"нет такого email" и "неверный пароль", чтобы перебором нельзя было узнать
+зарегистрированные email.
+
+### Безопасность и надёжность
+
+- **SSRF-защита** (`src/utils/urlSafety.ts`): блокируются `localhost`,
+  loopback/private/link-local IPv4- и IPv6-диапазоны, в том числе по итогам
+  DNS-резолва домена (защита от DNS rebinding)
+- **Обработка ошибок**: `AppError` + централизованный `error.middleware.ts` —
+  штатные ошибки (`AppError`, `ZodError`) превращаются в предсказуемый
+  JSON-ответ, неожиданные логируются со стеком
+- **Логирование**: pino — уровень через `LOG_LEVEL`, pretty-print в
+  development, структурированный JSON в остальных окружениях;
+  `logger.middleware.ts` логирует каждый запрос после ответа с уровнем по
+  статус-коду (`>=500` → error, `>=400` → warn, иначе → info)
+- **Rate limiting** (`express-rate-limit`): глобально 100 запросов/мин на IP
+  на весь API кроме `/health`; отдельно 10 запросов/15мин на весь `/auth`
+  (включая `/auth/register`)
+- **`getClientIp`** (`src/utils/getClientIp.ts`): реальный IP с учётом
+  `X-Forwarded-For`/`X-Real-IP` (актуально за прокси/докером), нормализация
+  IPv4-mapped IPv6-адресов (`::ffff:x.x.x.x`); при localhost/unknown — `null`
+  вместо падения запроса
+
+### Статистика переходов
+
+- Каждый переход (`clicks`) пишет дату, IP, регион (geo), браузер+версию,
+  ОС+версию, тип устройства, флаг бота
+- `ua-parser-js` — браузер/версия/ОС/тип устройства из User-Agent;
+  `isbot` — фильтрация ботов/краулеров: пишутся в БД (`isBot: true`), но
+  исключены из всей агрегированной статистики и списков кликов
 - Geo — через настраиваемый провайдер в формате ip-api.com
   (`src/services/geo.service.ts`, `GEO_API_BASE_URL`); таймаут и любая
-  сетевая ошибка не роняют запись клика, просто geo-поля остаются `null`
-- Фильтрация ботов/краулеров через библиотеку `isbot`
-  (`src/utils/userAgent.ts`) — боты пишутся в БД (`isBot: true`), но
-  исключены из всей агрегированной статистики и из списков кликов
-- Запись клика — асинхронно, после отправки редиректа (`void
-  clicksService.recordClick(...)` без await в `redirect.controller.ts`),
-  чтобы geo-lookup не задерживал ответ пользователю
+  сетевая ошибка не роняют запись клика, geo-поля просто остаются `null`
+- Запись клика — асинхронно, после отправки редиректа, чтобы geo-lookup не
+  задерживал ответ пользователю
 - Redis-кэш перед БД на redirect-эндпоинте (`src/lib/redis.ts`,
   `REDIS_LINK_CACHE_TTL_SECONDS`); при недоступности Redis — прозрачный
-  fallback на БД, сервис не падает; ручная деактивация инвалидирует кэш
-  сразу, TTL-истечение проверяется по `expiresAt` даже для закэшированного значения
-- Пагинация (`src/utils/pagination.ts`, `?page=&pageSize=`): список кликов
-  по ссылке (`GET /api/links/:token/clicks`) и список всех ссылок
-  (`GET /api/admin/links`)
-- Глобальная статистика сервиса — `GET /api/admin/stats` (требует
-  авторизации): totalLinks, totalClicks, clicksByDay (30 дней),
-  deviceBreakdown, топ-10 ссылок по кликам
-- Статистика по одной ссылке дополнена в `GET /api/links/:token/stats`:
-  `stats.totalClicks`, `stats.clicksByDay`, `stats.deviceBreakdown`
-- Экспорт в CSV через библиотеку `csv-stringify` (`src/utils/csv.ts`):
-  `GET /api/links/:token/clicks/export` (по ссылке) и
-  `GET /api/admin/stats/export` (по всему сервису, требует авторизации)
-- Визуализация (графики, разбивка по устройствам на дашборде) — это уже
-  фронтенд-часть, сознательно не делалась в этом шаге; все данные для неё уже отдаются API выше
+  fallback на БД; ручная деактивация инвалидирует кэш сразу, TTL-истечение
+  проверяется по `expiresAt` даже для закэшированного значения
+- Пагинация (`src/utils/pagination.ts`, `?page=&pageSize=`) и экспорт в CSV
+  (`csv-stringify`, `src/utils/csv.ts`) — и по одной ссылке, и по всему сервису
 
-### Качество и инфраструктура (в процессе)
+### Качество кода
 
 - ESLint (flat config, `eslint.config.mjs`): `@typescript-eslint` +
   `eslint-config-prettier`. Type-aware линтинг `src/**` через `tsconfig.json`
-  и `tests/**` через отдельный `tsconfig.test.json` (у которого шире `rootDir`
-  и не исключена папка `tests/`, в отличие от основного конфига)
-- Path alias `@/*` → `src/*` и `@tests/*` → `tests/*` (см. ниже) — работает
-  одинаково в dev (`tsx`), тестах (`vitest`, через `resolve.alias`) и
-  проде (`tsc` + `tsc-alias` переписывает `@/...` обратно в относительные
-  пути в `dist/` при `npm run build`)
-- Vitest: юнит-тесты (`tests/unit/`, 40 тестов, без БД — чистые функции:
-  SSRF-валидация, генерация кодов, пагинация, CSV, бот-детекция, UA-парсинг,
-  `AppError`) и интеграционные тесты (`tests/integration/`, 27 тестов через
-  `supertest` против реального Express-приложения + тестовый PostgreSQL/Redis:
-  создание/редирект/TTL/деактивация ссылок, auth login/logout/me, клики и
-  агрегированная статистика с ботами, admin-эндпоинты и авторизация)
-  - `npm test` — всё; `npm run test:unit` / `npm run test:integration` — по отдельности
-  - Тестовое окружение — `tests/setupEnv.ts` (дефолты через `??=`, переопределяются
-    реальными env в CI); geo-провайдер в тестах указывает на заведомо закрытый
-    порт, чтобы не ходить в реальный ip-api.com и не тормозить тесты на таймауте
-  - `truncateAll()` между тестами чистит и Postgres (`TRUNCATE ... CASCADE`),
-    и Redis (`FLUSHDB`) — без этого закэшированные redirect-записи одного
-    теста "протекают" в следующий и ломают детерминированность
+  и `tests/**` через отдельный `tsconfig.test.json`
+- `tsconfig.json`: строгий набор флагов, включая `exactOptionalPropertyTypes`,
+  `noUncheckedIndexedAccess`, `noPropertyAccessFromIndexSignature`
+- Path alias `@/*` → `src/*` и `@tests/*` → `tests/*` — работает одинаково в
+  dev (`tsx`), тестах (`vitest`, через `resolve.alias`) и проде (`tsc` +
+  `tsc-alias` переписывает `@/...` обратно в относительные пути в `dist/`
+  при `npm run build`)
 
-**Про path alias `@/`:** переменная `BASE_URL` изначально называлась именно
-так и совпала с зарезервированным именем `import.meta.env.BASE_URL` у
-Vite/Vitest, которое просачивалось в `process.env` поверх нашего значения —
-переименована в `PUBLIC_BASE_URL` во избежание подобных коллизий с тулингом
-в будущем.
+### Тесты
+
+Vitest: юнит-тесты (`tests/unit/`, без БД — чистые функции и zod-схемы:
+SSRF-валидация, генерация кодов, пагинация, CSV, бот-детекция, UA-парсинг,
+`AppError`, auth-схемы) и интеграционные тесты (`tests/integration/`, через
+`supertest` против реального Express-приложения + тестовый PostgreSQL/Redis:
+создание/редирект/TTL/деактивация ссылок, регистрация/логин/`/me`, "мои
+ссылки", клики и агрегированная статистика с ботами, admin-эндпоинты и
+проверка роли).
+
+- `npm test` — всё; `npm run test:unit` / `npm run test:integration` — по отдельности
+- Тестовое окружение — `tests/setupEnv.ts` (дефолты через `??=`,
+  переопределяются реальными env в CI); geo-провайдер в тестах указывает на
+  заведомо закрытый порт, чтобы не ходить в реальный ip-api.com
+- `truncateAll()` между тестами чистит и Postgres (`TRUNCATE ... CASCADE`),
+  и Redis (`FLUSHDB`) — без этого закэшированные redirect-записи одного
+  теста "протекают" в следующий
+- `authRateLimiter` (10 запросов/15мин) общий на всё время жизни
+  Express-приложения внутри одного тестового файла — интеграционные тесты
+  на `/auth/*` держат общее количество запросов в файле под этим лимитом
 
 ### Docker
+
+Только backend (frontend в Docker не участвует — см. корневой README и
+`frontend/README.md`).
 
 - Многостадийный `Dockerfile` (`deps` → `build` → `prod-deps` → `runner`):
   собирается `dist/` через `npm run build`, в финальный образ (`node:24-alpine`)
   копируются только прод-зависимости и скомпилированный код — никакого `src/`,
-  `tests/`, TypeScript-тулинга. `bcryptjs`/`postgres`/`ioredis`/`isbot`/
-  `csv-stringify` — чистый JS, нативная сборка (build tools в Alpine) не
-  нужна. Контейнер работает от встроенного непривилегированного пользователя
-  `node` (готовый юзер из официального образа, свой создавать не нужно),
-  есть `HEALTHCHECK` на `/health`
-- **Миграции — ручные.** Контейнер их не прогоняет сам при старте (никакого
-  entrypoint-скрипта с ретраями): `CMD` — просто `node dist/index.js`.
-  Миграции нужно явно прогнать перед первым стартом (и после каждого
-  обновления схемы):
+  `tests/`, TypeScript-тулинга. Контейнер работает от встроенного
+  непривилегированного пользователя `node`, есть `HEALTHCHECK` на `/health`
+- **Миграции — ручные.** Контейнер их не прогоняет сам при старте: `CMD` —
+  просто `node dist/index.js`. Прогнать явно перед первым стартом и после
+  каждого обновления схемы:
   ```bash
   docker compose run --rm backend node dist/db/migrate.js
   ```
 - `npm run build` дополнительно копирует `src/db/migrations/*.sql` в
-  `dist/db/migrations/` (`copy:migrations` — `tsc` компилирует только `.ts`
-  и не трогает `.sql`); `migrate.ts` резолвит папку миграций через
-  `path.join(__dirname, "migrations")`, а не хардкодом относительно `cwd`,
-  поэтому корректно работает и в dev (`src/db`), и в собранном `dist/db`
-- `docker-compose.yml` в корне репозитория: `postgres` + `redis` + `backend` +
-  `frontend`, с health-check'ами и `depends_on: condition: service_healthy`.
-  Все четыре сервиса доступны с портов хоста — удобно для локальной
-  разработки. Пример переменных — в корневом `.env.example`
+  `dist/db/migrations/` (`copy:migrations`); `migrate.ts` резолвит папку
+  миграций через `path.join(__dirname, "migrations")`, поэтому корректно
+  работает и в dev (`src/db`), и в собранном `dist/db`
+- `docker-compose.yml` в корне репозитория: `postgres` + `redis` + `backend`,
+  с health-check'ами и `depends_on: condition: service_healthy`. Все три
+  сервиса доступны с портов хоста — удобно для локальной разработки. Пример
+  переменных — в корневом `.env.example`
 - `docker-compose.prod.yml` — прод-оверрайд (`postgres`/`redis` скрыты
-  полностью, `backend`/`frontend` — только на `127.0.0.1`, единственная
-  внешняя точка входа — nginx на хосте). Подробности — в корневом README
+  полностью, `backend` — только на `127.0.0.1`, единственная внешняя точка
+  входа — nginx на хосте, см. `deploy/nginx.conf.example`). Подробности —
+  в корневом README
 
 ```bash
 # из корня репозитория
@@ -172,35 +173,56 @@ docker compose run --rm backend node dist/db/seed.js      # разово — с�
 docker compose logs -f backend
 ```
 
-Собранный `dist/` локально проверен end-to-end (реальный PostgreSQL + Redis,
-чистое окружение без унаследованных dev-переменных): миграции применяются,
-`/health`/`/api/links` отвечают корректно, боты (через `isbot`) исключаются
-из статистики, CSV-экспорт (через `csv-stringify`) собирается верно. Сама
-сборка Docker-образа (`docker build`) проверена по шагам вручную (Docker-демон
-поднимается в песочнице), но упирается в сетевые ограничения окружения при
-пуле базового образа `node:24-alpine` с Docker Hub — в GitHub Actions (полный
-доступ в интернет) это ограничение не действует.
-
 ### CI/CD
 
-`.github/workflows/ci.yml`, три джобы на каждый push/PR в `main`:
-1. `lint-and-typecheck` — `typecheck`, `typecheck:tests`, `lint`
-2. `test` — `npm test` с реальными Postgres/Redis как service-контейнерами
-3. `build-image` — собирает `Dockerfile` (без пуша) через
-   `docker/build-push-action`, чтобы поймать поломки сборки образа; идёт
-   после успешных lint/typecheck/test
+`.gitlab-ci.yml` (в корне репозитория) — GitLab CI/CD, четыре стадии
+(`lint` → `test` → `build` → `deploy`):
+
+1. `lint-and-typecheck-backend` — `typecheck`, `typecheck:tests`, `lint`
+2. `test-backend` — `npm test` с реальными Postgres/Redis как GitLab CI
+   `services:`; джоба сама ждёт готовности Postgres через `pg_isready` в
+   цикле перед запуском тестов (в отличие от GitHub Actions, у GitLab нет
+   встроенного health-check для services)
+3. `build-image-backend` — собирает `Dockerfile` (без пуша, через
+   `docker:dind`), чтобы поймать поломки сборки образа; идёт после
+   успешных lint/typecheck/test (`needs:`)
+4. `deploy` — по SSH деплоит backend на VPS, только на push в `main`;
+   подробности — в разделе "Деплой" ниже
+
+Для frontend — `lint-and-typecheck-frontend` (+ `vite build` как
+дополнительная проверка) и `test-frontend`, без сборки образа и без участия
+в `deploy` (только гейтят его: `deploy` не запустится, если frontend
+сломан) — фронтенд собирается локально и деплоится отдельно, см.
+`frontend/README.md`.
 
 ### Деплой
 
-Готового хостинга/CD-пайплайна с публикацией образа в этом задании нет —
-вне рамок тестового задания. Для реального деплоя: собрать образ
-(`docker build -t <registry>/snaplink-backend ./backend`), запушить в
-любой container registry (GHCR/Docker Hub/etc — можно добавить job в
-`ci.yml` на пуш по тегу) и поднять его туда, где есть managed PostgreSQL и
-Redis (Railway, Render, Fly.io, VPS с `docker-compose.yml` из корня и т.д.),
-прокинув переменные окружения из `.env.example`. Для managed БД без
-собственного docker-compose — просто указать `DATABASE_URL`/`REDIS_URL` от
-провайдера вместо `postgres`/`redis` из compose-сети.
+`deploy` — джоба в `.gitlab-ci.yml` (stage `deploy`, только на push в
+`main`): по SSH подключается к VPS, `git reset --hard` на актуальный
+`main`, пересобирает backend через
+`docker compose -f docker-compose.yml -f docker-compose.prod.yml build`
+(БД скрыта, backend — только на `127.0.0.1`, см. `docker-compose.prod.yml`),
+поднимает его, прогоняет миграции (`node dist/db/migrate.js`) и чистит
+неиспользуемые образы. Frontend этой джобой не деплоится — собирается
+локально и выкладывается отдельно (см. `frontend/README.md`).
+
+Нужные CI/CD-переменные проекта (GitLab: Settings → CI/CD → Variables,
+Protected + Masked):
+- `VPS_HOST`, `VPS_USER` — адрес и пользователь для SSH
+- `VPS_SSH_KEY` — приватный ключ (без пароля) с доступом на сервер
+- `VPS_PATH` — путь к уже склонированному репозиторию на сервере
+
+На VPS перед первым деплоем нужно один раз вручную: склонировать
+репозиторий в `$VPS_PATH`, положить туда `.env` (см. корневой
+`.env.example`), поставить Docker + Compose plugin и настроить внешний
+nginx (см. `deploy/nginx.conf.example`) — дальше каждый push в `main`
+деплоит backend сам; frontend выкладывается отдельно.
+
+Managed-хостинг (Railway/Render/Fly.io/etc вместо своего VPS) тоже
+подходит: собрать образ (`docker build -t <registry>/snaplink-backend
+./backend`), запушить в container registry и прокинуть переменные
+окружения из `.env.example`, указав `DATABASE_URL`/`REDIS_URL` от
+managed-провайдера вместо `postgres`/`redis` из compose-сети.
 
 ### Локальный запуск
 

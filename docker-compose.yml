@@ -49,22 +49,13 @@ services:
       JWT_EXPIRES_IN_SECONDS: ${JWT_EXPIRES_IN_SECONDS:-604800}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
       REDIS_URL: redis://redis:6379
       REDIS_LINK_CACHE_TTL_SECONDS: ${REDIS_LINK_CACHE_TTL_SECONDS:-60}
       GEO_API_BASE_URL: ${GEO_API_BASE_URL:-http://ip-api.com/json}
       GEO_LOOKUP_TIMEOUT_MS: ${GEO_LOOKUP_TIMEOUT_MS:-2000}
     ports:
       - "${APP_PORT:-3000}:3000"
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    depends_on:
-      - backend
-    ports:
-      - "${WEB_PORT:-8080}:80"
 
 volumes:
   postgres_data:

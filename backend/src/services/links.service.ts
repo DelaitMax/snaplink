@@ -13,6 +13,7 @@ export interface CreateLinkInput {
   url: string;
   alias?: string;
   ttlSeconds?: number;
+  userId?: number;
 }
 
 export interface CreateLinkResult {
@@ -73,8 +74,13 @@ export async function createLink(input: CreateLinkInput): Promise<CreateLinkResu
       originalUrl: validatedUrl.toString(),
       isCustomAlias,
       expiresAt,
+      ...(input.userId !== undefined ? { userId: input.userId } : {}),
     })
     .returning();
+
+  if (!created) {
+    throw new AppError("Failed to create link", 500);
+  }
 
   return created;
 }
@@ -101,7 +107,7 @@ export interface RedirectLink {
   shortCode: string;
   originalUrl: string;
   isActive: boolean;
-  expiresAt: string | null; // ISO — сериализуемо для кэша
+  expiresAt: string | null;
 }
 
 export function redirectCacheKey(shortCode: string): string {
@@ -136,8 +142,6 @@ export async function resolveLinkForRedirect(shortCode: string): Promise<Redirec
       expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
     };
 
-    // Кэшируем и активные, и деактивированные/истёкшие ссылки — иначе повторные
-    // запросы на мёртвый код каждый раз бьют в БД.
     await cacheSet(cacheKey, JSON.stringify(link), env.REDIS_LINK_CACHE_TTL_SECONDS);
   }
 
@@ -165,6 +169,10 @@ export async function deactivateLinkByStatsToken(statsToken: string): Promise<Li
     .where(eq(links.id, link.id))
     .returning();
 
+  if (!updated) {
+    throw new AppError("Failed to deactivate link", 500);
+  }
+
   await cacheDel(redirectCacheKey(updated.shortCode));
 
   return updated;
@@ -179,6 +187,43 @@ export interface LinkListItem {
   expiresAt: Date | null;
   createdAt: Date;
   clicks: number;
+}
+
+export interface MyLinkListItem extends LinkListItem {
+  statsToken: string;
+}
+
+export async function listMyLinks(
+  userId: number,
+  page: number,
+  pageSize: number,
+): Promise<PaginatedResult<MyLinkListItem>> {
+  const where = eq(links.userId, userId);
+
+  const [items, totalRow] = await Promise.all([
+    db
+      .select({
+        id: links.id,
+        shortCode: links.shortCode,
+        statsToken: links.statsToken,
+        originalUrl: links.originalUrl,
+        isActive: links.isActive,
+        isCustomAlias: links.isCustomAlias,
+        expiresAt: links.expiresAt,
+        createdAt: links.createdAt,
+        clicks: count(clicksTable.id),
+      })
+      .from(links)
+      .leftJoin(clicksTable, and(eq(clicksTable.linkId, links.id), eq(clicksTable.isBot, false)))
+      .where(where)
+      .groupBy(links.id)
+      .orderBy(desc(links.id))
+      .limit(pageSize)
+      .offset((page - 1) * pageSize),
+    db.select({ total: count() }).from(links).where(where),
+  ]);
+
+  return buildPaginatedResult(items, totalRow[0]?.total ?? 0, page, pageSize);
 }
 
 export async function listAllLinks(page: number, pageSize: number): Promise<PaginatedResult<LinkListItem>> {
@@ -203,5 +248,5 @@ export async function listAllLinks(page: number, pageSize: number): Promise<Pagi
     db.select({ total: count() }).from(links),
   ]);
 
-  return buildPaginatedResult(items, totalRow[0].total, page, pageSize);
+  return buildPaginatedResult(items, totalRow[0]?.total ?? 0, page, pageSize);
 }

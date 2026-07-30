@@ -5,6 +5,7 @@ import * as clicksService from "@/services/clicks.service";
 import { createLinkSchema, statsTokenParamSchema } from "@/schemas/links.schema";
 import { parsePagination } from "@/utils/pagination";
 import { toCsv } from "@/utils/csv";
+import { AppError } from "@/utils/AppError";
 
 function buildShareUrl(shortCode: string): string {
   return `${env.PUBLIC_BASE_URL.replace(/\/+$/, "")}/${shortCode}`;
@@ -22,8 +23,9 @@ export async function createLink(req: Request, res: Response, next: NextFunction
 
     const link = await linksService.createLink({
       url: dto.url,
-      alias: dto.alias,
-      ttlSeconds,
+      ...(dto.alias !== undefined ? { alias: dto.alias } : {}),
+      ...(ttlSeconds !== undefined ? { ttlSeconds } : {}),
+      ...(req.user !== undefined ? { userId: req.user.id } : {}),
     });
 
     res.status(201).json({
@@ -34,6 +36,20 @@ export async function createLink(req: Request, res: Response, next: NextFunction
       expiresAt: link.expiresAt,
       createdAt: link.createdAt,
     });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function myLinks(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    if (!req.user) {
+      throw AppError.unauthorized("Authentication required", "NOT_AUTHENTICATED");
+    }
+
+    const { page, pageSize } = parsePagination(req.query);
+    const result = await linksService.listMyLinks(req.user.id, page, pageSize);
+    res.json(result);
   } catch (err) {
     next(err);
   }
@@ -57,6 +73,8 @@ export async function getLinkStats(req: Request, res: Response, next: NextFuncti
         totalClicks: aggregates.totalClicks,
         clicksByDay: aggregates.clicksByDay,
         deviceBreakdown: aggregates.deviceBreakdown,
+        browserBreakdown: aggregates.browserBreakdown,
+        osBreakdown: aggregates.osBreakdown,
       },
     });
   } catch (err) {

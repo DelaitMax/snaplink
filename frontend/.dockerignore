@@ -1,0 +1,13 @@
+node_modules
+dist
+.env
+.env.*
+!.env.example
+*.log
+.git
+.gitignore
+*.md
+src/**/*.test.ts
+src/**/*.test.tsx
+src/setupTests.ts
+src/testUtils

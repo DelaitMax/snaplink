@@ -1,4 +1,5 @@
 import { Routes, Route } from "react-router-dom";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Layout } from "@/components/Layout";
 import { ProtectedRoute } from "@/features/auth/ProtectedRoute";
 import { useThemeEffect } from "@/features/theme/useThemeEffect";
@@ -15,29 +16,31 @@ export function App() {
 
   return (
     <Layout>
-      <Routes>
-        <Route path="/" element={<CreateLinkPage />} />
-        <Route path="/s/:statsToken" element={<LinkStatsPage />} />
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/register" element={<RegisterPage />} />
-        <Route
-          path="/my-links"
-          element={
-            <ProtectedRoute>
-              <MyLinksPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/admin"
-          element={
-            <ProtectedRoute requireAdmin>
-              <AdminDashboardPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route path="*" element={<NotFoundPage />} />
-      </Routes>
+      <ErrorBoundary>
+        <Routes>
+          <Route path="/" element={<CreateLinkPage />} />
+          <Route path="/s/:statsToken" element={<LinkStatsPage />} />
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
+          <Route
+            path="/my-links"
+            element={
+              <ProtectedRoute>
+                <MyLinksPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin"
+            element={
+              <ProtectedRoute requireAdmin>
+                <AdminDashboardPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route path="*" element={<NotFoundPage />} />
+        </Routes>
+      </ErrorBoundary>
     </Layout>
   );
 }

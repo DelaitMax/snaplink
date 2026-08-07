@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
+import { QR_CODE_COLORS } from "@/theme/qrCodeColors";
 
 export function QrCode({ value, size = 168 }: { value: string; size?: number }) {
   const [dataUrl, setDataUrl] = useState<string | null>(null);
@@ -8,17 +9,18 @@ export function QrCode({ value, size = 168 }: { value: string; size?: number }) 
   useEffect(() => {
     let cancelled = false;
 
-    QRCode.toDataURL(value, {
-      width: size,
-      margin: 1,
-      color: { dark: "#14171f", light: "#ffffff" },
-    })
-      .then((url) => {
+    void (async () => {
+      try {
+        const url = await QRCode.toDataURL(value, {
+          width: size,
+          margin: 1,
+          color: QR_CODE_COLORS,
+        });
         if (!cancelled) setDataUrl(url);
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setFailed(true);
-      });
+      }
+    })();
 
     return () => {
       cancelled = true;

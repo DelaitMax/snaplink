@@ -1,9 +1,11 @@
+import { StatusCodes } from "http-status-codes";
+
 export class AppError extends Error {
   public readonly statusCode: number;
   public readonly isOperational: boolean;
   public readonly code?: string;
 
-  constructor(message: string, statusCode = 500, code?: string) {
+  constructor(message: string, statusCode: number = StatusCodes.INTERNAL_SERVER_ERROR, code?: string) {
     super(message);
     this.name = "AppError";
     this.statusCode = statusCode;
@@ -16,26 +18,26 @@ export class AppError extends Error {
   }
 
   static badRequest(message: string, code?: string): AppError {
-    return new AppError(message, 400, code);
+    return new AppError(message, StatusCodes.BAD_REQUEST, code);
   }
 
   static unauthorized(message: string, code?: string): AppError {
-    return new AppError(message, 401, code);
+    return new AppError(message, StatusCodes.UNAUTHORIZED, code);
   }
 
   static forbidden(message: string, code?: string): AppError {
-    return new AppError(message, 403, code);
+    return new AppError(message, StatusCodes.FORBIDDEN, code);
   }
 
   static notFound(message: string, code?: string): AppError {
-    return new AppError(message, 404, code);
+    return new AppError(message, StatusCodes.NOT_FOUND, code);
   }
 
   static conflict(message: string, code?: string): AppError {
-    return new AppError(message, 409, code);
+    return new AppError(message, StatusCodes.CONFLICT, code);
   }
 
   static gone(message: string, code?: string): AppError {
-    return new AppError(message, 410, code);
+    return new AppError(message, StatusCodes.GONE, code);
   }
 }

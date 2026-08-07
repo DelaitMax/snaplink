@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
+import { StatusCodes } from "http-status-codes";
 import { env } from "@/config/env";
 import * as linksService from "@/services/links.service";
 import * as clicksService from "@/services/clicks.service";
@@ -28,7 +29,7 @@ export async function createLink(req: Request, res: Response, next: NextFunction
       ...(req.user !== undefined ? { userId: req.user.id } : {}),
     });
 
-    res.status(201).json({
+    res.status(StatusCodes.CREATED).json({
       shortCode: link.shortCode,
       shareUrl: buildShareUrl(link.shortCode),
       statsUrl: buildStatsUrl(link.statsToken),

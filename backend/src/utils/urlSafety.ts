@@ -86,8 +86,8 @@ export async function assertSafeUrl(rawUrl: string): Promise<URL> {
     return url;
   }
 
-  // Хост — доменное имя: резолвим и проверяем ВСЕ полученные адреса,
-  // чтобы поймать домены, специально указывающие на приватные IP.
+  // Host is a domain name: resolve it and check ALL returned addresses,
+  // to catch domains that deliberately point at private IPs.
   let addresses: string[];
   try {
     const records = await dns.lookup(hostname, { all: true, verbatim: true });

@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
+import { StatusCodes } from "http-status-codes";
 import * as linksService from "@/services/links.service";
 import * as clicksService from "@/services/clicks.service";
 import { getClientIp } from "@/utils/getClientIp";
@@ -9,7 +10,7 @@ export async function redirectToOriginalUrl(req: Request, res: Response, next: N
     const { code } = shortCodeParamSchema.parse(req.params);
     const link = await linksService.resolveLinkForRedirect(code);
 
-    res.redirect(302, link.originalUrl);
+    res.redirect(StatusCodes.MOVED_TEMPORARILY, link.originalUrl);
 
     void clicksService.recordClick({
       linkId: link.id,

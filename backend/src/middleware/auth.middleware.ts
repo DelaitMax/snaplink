@@ -44,7 +44,7 @@ export function optionalAuth(req: Request, _res: Response, next: NextFunction): 
   next();
 }
 
-// requireAuth должен идти перед requireAdmin в цепочке роутов
+// requireAuth must run before requireAdmin in the route chain
 export function requireAdmin(req: Request, _res: Response, next: NextFunction): void {
   if (req.user?.role !== "admin") {
     next(AppError.forbidden("Admin access required", "ADMIN_REQUIRED"));

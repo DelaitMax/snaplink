@@ -1,19 +1,16 @@
 import { z } from "zod";
+import { MAX_LINK_TTL_SECONDS } from "@/constants";
+import { isValidAlias } from "@/utils/shortCode";
 
 export const createLinkSchema = z.object({
   url: z.string().min(1, "url is required").max(2048, "url is too long"),
   alias: z
     .string()
-    .min(3)
-    .max(32)
-    .regex(/^[a-zA-Z0-9_-]+$/, "alias may only contain letters, digits, '_' and '-'")
+    .refine(isValidAlias, {
+      message: "Alias must be 3-32 characters long and contain only letters, digits, '_' or '-'",
+    })
     .optional(),
-  ttlSeconds: z.coerce
-    .number()
-    .int()
-    .positive()
-    .max(60 * 60 * 24 * 365 * 5)
-    .optional(),
+  ttlSeconds: z.coerce.number().int().positive().max(MAX_LINK_TTL_SECONDS).optional(),
 });
 
 export type CreateLinkDto = z.infer<typeof createLinkSchema>;

@@ -1,9 +1,17 @@
-import { and, count, desc, eq } from "drizzle-orm";
-import { db } from "@/db/client";
-import { clicks as clicksTable, links } from "@/db/schema";
-import type { Link } from "@/db/schema";
+import { StatusCodes } from "http-status-codes";
 import { env } from "@/config/env";
+import type { Link } from "@/db/schema";
 import { cacheDel, cacheGet, cacheSet } from "@/lib/redis";
+import {
+  deactivateLink,
+  findLinkByShortCode,
+  findLinkByStatsToken,
+  insertLink,
+  listAllLinksPage,
+  listLinksByUser,
+  type LinkListRow,
+  type MyLinkListRow,
+} from "@/repositories/links.repository";
 import { AppError } from "@/utils/AppError";
 import { buildPaginatedResult, type PaginatedResult } from "@/utils/pagination";
 import { createShortCode, createStatsToken, isReservedAlias, isValidAlias } from "@/utils/shortCode";
@@ -51,9 +59,7 @@ export async function createLink(input: CreateLinkInput): Promise<CreateLinkResu
       );
     }
 
-    const existing = await db.query.links.findFirst({
-      where: eq(links.shortCode, input.alias),
-    });
+    const existing = await findLinkByShortCode(input.alias);
     if (existing) {
       throw AppError.conflict("This alias is already taken", "ALIAS_TAKEN");
     }
@@ -66,20 +72,17 @@ export async function createLink(input: CreateLinkInput): Promise<CreateLinkResu
 
   const expiresAt = input.ttlSeconds ? new Date(Date.now() + input.ttlSeconds * 1000) : null;
 
-  const [created] = await db
-    .insert(links)
-    .values({
-      shortCode,
-      statsToken: createStatsToken(),
-      originalUrl: validatedUrl.toString(),
-      isCustomAlias,
-      expiresAt,
-      ...(input.userId !== undefined ? { userId: input.userId } : {}),
-    })
-    .returning();
+  const created = await insertLink({
+    shortCode,
+    statsToken: createStatsToken(),
+    originalUrl: validatedUrl.toString(),
+    isCustomAlias,
+    expiresAt,
+    ...(input.userId !== undefined ? { userId: input.userId } : {}),
+  });
 
   if (!created) {
-    throw new AppError("Failed to create link", 500);
+    throw new AppError("Failed to create link", StatusCodes.INTERNAL_SERVER_ERROR);
   }
 
   return created;
@@ -88,12 +91,10 @@ export async function createLink(input: CreateLinkInput): Promise<CreateLinkResu
 async function generateUniqueShortCode(): Promise<string> {
   for (let attempt = 0; attempt < MAX_SHORT_CODE_GENERATION_ATTEMPTS; attempt++) {
     const candidate = createShortCode();
-    const existing = await db.query.links.findFirst({
-      where: eq(links.shortCode, candidate),
-    });
+    const existing = await findLinkByShortCode(candidate);
     if (!existing) return candidate;
   }
-  throw new AppError("Could not generate a unique short code, please try again", 500);
+  throw new AppError("Could not generate a unique short code, please try again", StatusCodes.INTERNAL_SERVER_ERROR);
 }
 
 function isLinkUsable(link: Pick<Link, "isActive" | "expiresAt">): boolean {
@@ -129,7 +130,7 @@ export async function resolveLinkForRedirect(shortCode: string): Promise<Redirec
   }
 
   if (!link) {
-    const row = await db.query.links.findFirst({ where: eq(links.shortCode, shortCode) });
+    const row = await findLinkByShortCode(shortCode);
     if (!row) {
       throw AppError.notFound("Short link not found", "LINK_NOT_FOUND");
     }
@@ -142,7 +143,7 @@ export async function resolveLinkForRedirect(shortCode: string): Promise<Redirec
       expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
     };
 
-    await cacheSet(cacheKey, JSON.stringify(link), env.REDIS_LINK_CACHE_TTL_SECONDS);
+    await cacheLinkForRedirect(cacheKey, link);
   }
 
   if (!isLinkUsable({ isActive: link.isActive, expiresAt: link.expiresAt ? new Date(link.expiresAt) : null })) {
@@ -152,8 +153,24 @@ export async function resolveLinkForRedirect(shortCode: string): Promise<Redirec
   return link;
 }
 
+async function cacheLinkForRedirect(cacheKey: string, link: RedirectLink): Promise<void> {
+  const expiresAt = link.expiresAt ? new Date(link.expiresAt) : null;
+
+  if (!isLinkUsable({ isActive: link.isActive, expiresAt })) {
+    return;
+  }
+
+  let ttlSeconds = env.REDIS_LINK_CACHE_TTL_SECONDS;
+  if (expiresAt) {
+    const secondsUntilExpiry = Math.floor((expiresAt.getTime() - Date.now()) / 1000);
+    ttlSeconds = Math.max(1, Math.min(ttlSeconds, secondsUntilExpiry));
+  }
+
+  await cacheSet(cacheKey, JSON.stringify(link), ttlSeconds);
+}
+
 export async function getLinkByStatsToken(statsToken: string): Promise<Link> {
-  const link = await db.query.links.findFirst({ where: eq(links.statsToken, statsToken) });
+  const link = await findLinkByStatsToken(statsToken);
   if (!link) {
     throw AppError.notFound("Link not found", "LINK_NOT_FOUND");
   }
@@ -163,14 +180,9 @@ export async function getLinkByStatsToken(statsToken: string): Promise<Link> {
 export async function deactivateLinkByStatsToken(statsToken: string): Promise<Link> {
   const link = await getLinkByStatsToken(statsToken);
 
-  const [updated] = await db
-    .update(links)
-    .set({ isActive: false, updatedAt: new Date() })
-    .where(eq(links.id, link.id))
-    .returning();
-
+  const updated = await deactivateLink(link.id);
   if (!updated) {
-    throw new AppError("Failed to deactivate link", 500);
+    throw new AppError("Failed to deactivate link", StatusCodes.INTERNAL_SERVER_ERROR);
   }
 
   await cacheDel(redirectCacheKey(updated.shortCode));
@@ -178,75 +190,19 @@ export async function deactivateLinkByStatsToken(statsToken: string): Promise<Li
   return updated;
 }
 
-export interface LinkListItem {
-  id: number;
-  shortCode: string;
-  originalUrl: string;
-  isActive: boolean;
-  isCustomAlias: boolean;
-  expiresAt: Date | null;
-  createdAt: Date;
-  clicks: number;
-}
-
-export interface MyLinkListItem extends LinkListItem {
-  statsToken: string;
-}
+export type LinkListItem = LinkListRow;
+export type MyLinkListItem = MyLinkListRow;
 
 export async function listMyLinks(
   userId: number,
   page: number,
   pageSize: number,
 ): Promise<PaginatedResult<MyLinkListItem>> {
-  const where = eq(links.userId, userId);
-
-  const [items, totalRow] = await Promise.all([
-    db
-      .select({
-        id: links.id,
-        shortCode: links.shortCode,
-        statsToken: links.statsToken,
-        originalUrl: links.originalUrl,
-        isActive: links.isActive,
-        isCustomAlias: links.isCustomAlias,
-        expiresAt: links.expiresAt,
-        createdAt: links.createdAt,
-        clicks: count(clicksTable.id),
-      })
-      .from(links)
-      .leftJoin(clicksTable, and(eq(clicksTable.linkId, links.id), eq(clicksTable.isBot, false)))
-      .where(where)
-      .groupBy(links.id)
-      .orderBy(desc(links.id))
-      .limit(pageSize)
-      .offset((page - 1) * pageSize),
-    db.select({ total: count() }).from(links).where(where),
-  ]);
-
-  return buildPaginatedResult(items, totalRow[0]?.total ?? 0, page, pageSize);
+  const { items, total } = await listLinksByUser(userId, pageSize, (page - 1) * pageSize);
+  return buildPaginatedResult(items, total, page, pageSize);
 }
 
 export async function listAllLinks(page: number, pageSize: number): Promise<PaginatedResult<LinkListItem>> {
-  const [items, totalRow] = await Promise.all([
-    db
-      .select({
-        id: links.id,
-        shortCode: links.shortCode,
-        originalUrl: links.originalUrl,
-        isActive: links.isActive,
-        isCustomAlias: links.isCustomAlias,
-        expiresAt: links.expiresAt,
-        createdAt: links.createdAt,
-        clicks: count(clicksTable.id),
-      })
-      .from(links)
-      .leftJoin(clicksTable, and(eq(clicksTable.linkId, links.id), eq(clicksTable.isBot, false)))
-      .groupBy(links.id)
-      .orderBy(desc(links.id))
-      .limit(pageSize)
-      .offset((page - 1) * pageSize),
-    db.select({ total: count() }).from(links),
-  ]);
-
-  return buildPaginatedResult(items, totalRow[0]?.total ?? 0, page, pageSize);
+  const { items, total } = await listAllLinksPage(pageSize, (page - 1) * pageSize);
+  return buildPaginatedResult(items, total, page, pageSize);
 }

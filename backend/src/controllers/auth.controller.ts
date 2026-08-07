@@ -1,4 +1,5 @@
 import type { CookieOptions, NextFunction, Request, Response } from "express";
+import { StatusCodes } from "http-status-codes";
 import { env } from "@/config/env";
 import * as authService from "@/services/auth.service";
 import { AppError } from "@/utils/AppError";
@@ -37,7 +38,7 @@ export async function register(req: Request, res: Response, next: NextFunction):
     const token = signAuthToken({ sub: user.id, email: user.email, role: user.role });
     res.cookie(env.JWT_COOKIE_NAME, token, cookieOptions());
 
-    res.status(201).json({ id: user.id, email: user.email, role: user.role });
+    res.status(StatusCodes.CREATED).json({ id: user.id, email: user.email, role: user.role });
   } catch (err) {
     next(err);
   }
@@ -45,7 +46,7 @@ export async function register(req: Request, res: Response, next: NextFunction):
 
 export function logout(_req: Request, res: Response): void {
   res.clearCookie(env.JWT_COOKIE_NAME, { path: "/" });
-  res.status(204).send();
+  res.status(StatusCodes.NO_CONTENT).send();
 }
 
 export async function me(req: Request, res: Response, next: NextFunction): Promise<void> {

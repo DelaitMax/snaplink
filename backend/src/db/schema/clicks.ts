@@ -11,10 +11,11 @@ export const clicks = pgTable(
 
     clickedAt: timestamp("clicked_at", { withTimezone: true }).notNull().defaultNow(),
 
-    // IP уже "очищен" через getClientIp — либо реальный внешний IP, либо null.
+    // IP is already "cleaned" via getClientIp (see Phase 2) — either the
+    // real external IP, or null.
     ip: varchar("ip", { length: 45 }),
 
-    // Geo (ip-api.com или аналог). Нет данных/lookup не удался -> null.
+    // Geo (ip-api.com or similar). No data / lookup failed -> null.
     country: varchar("country", { length: 2 }),
     region: varchar("region", { length: 120 }),
     city: varchar("city", { length: 120 }),
@@ -24,12 +25,12 @@ export const clicks = pgTable(
     browserVersion: varchar("browser_version", { length: 30 }),
     os: varchar("os", { length: 60 }),
     osVersion: varchar("os_version", { length: 30 }),
-    // "desktop" | "mobile" | "tablet" | "other" — desktop не определяется ua-parser-js явно,
-    // поэтому нормализуем в services/clicks.service.ts.
+    // "desktop" | "mobile" | "tablet" | "other" — ua-parser-js doesn't detect
+    // desktop explicitly, so we normalize it in services/clicks.service.ts.
     deviceType: varchar("device_type", { length: 20 }).notNull().default("desktop"),
 
-    // Бот/краулер по UA — не участвует в агрегированной статистике,
-    // чтобы не искажать реальные показатели переходов.
+    // Bot/crawler detected via UA — excluded from aggregated stats so it
+    // doesn't skew real click-through numbers.
     isBot: boolean("is_bot").notNull().default(false),
 
     userAgent: text("user_agent"),

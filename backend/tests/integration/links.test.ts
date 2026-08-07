@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { links } from "@/db/schema";
 import { redirectCacheKey } from "@/services/links.service";
-import { cacheDel } from "@/lib/redis";
+import { cacheDel, redis } from "@/lib/redis";
 import { buildTestApp } from "./helpers/testApp";
 import { closeDb, runMigrations, truncateAll } from "./helpers/db";
 import { extractSetCookie } from "./helpers/auth";
@@ -94,6 +94,36 @@ describe("Links API", () => {
 
     const expired = await request(app).get("/ttllink");
     expect(expired.status).toBe(410);
+  });
+
+  it("does not cache a link that is already expired by the time it's read from the DB", async () => {
+    const create = await request(app)
+      .post("/api/links")
+      .send({ url: "https://example.com/stale", alias: "stalelink", ttlSeconds: 3600 });
+    expect(create.status).toBe(201);
+
+    await db.update(links).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(links.shortCode, "stalelink"));
+    await cacheDel(redirectCacheKey("stalelink"));
+
+    const res = await request(app).get("/stalelink");
+    expect(res.status).toBe(410);
+
+    const cached = await redis.get(redirectCacheKey("stalelink"));
+    expect(cached).toBeNull();
+  });
+
+  it("caps the Redis cache TTL to the link's remaining lifetime, not the default cache TTL", async () => {
+    const create = await request(app)
+      .post("/api/links")
+      .send({ url: "https://example.com/short-ttl", alias: "shortttl", ttlSeconds: 5 });
+    expect(create.status).toBe(201);
+
+    const res = await request(app).get("/shortttl");
+    expect(res.status).toBe(302);
+
+    const ttl = await redis.ttl(redirectCacheKey("shortttl"));
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(5);
   });
 
   it("deactivates a link via its statsToken, making the redirect return 410", async () => {

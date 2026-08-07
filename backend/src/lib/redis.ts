@@ -23,7 +23,7 @@ redis.on("connect", () => {
 });
 
 redis.connect().catch(() => {
-  /* обработано через on("error") выше */
+  /* handled via on("error") above */
 });
 
 export async function cacheGet(key: string): Promise<string | null> {
@@ -38,7 +38,7 @@ export async function cacheSet(key: string, value: string, ttlSeconds: number): 
   try {
     await redis.set(key, value, "EX", ttlSeconds);
   } catch {
-    // no-op: кэш недоступен, продолжаем без него
+    // no-op: cache is unavailable, continue without it
   }
 }
 

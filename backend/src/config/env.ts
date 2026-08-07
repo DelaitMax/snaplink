@@ -6,7 +6,7 @@ const envSchema = z.object({
 
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required").url("DATABASE_URL must be a valid connection string"),
 
-  PUBLIC_BASE_URL: z.string().url().default("http://localhost:3000"),
+  PUBLIC_BASE_URL: z.string().url("PUBLIC_BASE_URL must be a valid URL"),
 
   DEFAULT_LINK_TTL_SECONDS: z.coerce.number().int().positive().optional(),
 
@@ -28,6 +28,7 @@ const envSchema = z.object({
 
   GEO_API_BASE_URL: z.string().url().default("http://ip-api.com/json"),
   GEO_LOOKUP_TIMEOUT_MS: z.coerce.number().int().positive().default(2000),
+  GEO_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(21_600),
 });
 
 export type Env = z.infer<typeof envSchema>;

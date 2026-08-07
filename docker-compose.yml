@@ -19,6 +19,13 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --save 900 1
+      --save 300 10
+      --save 60 10000
     ports:
       - "${REDIS_PORT:-6379}:6379"
     volumes:
@@ -54,6 +61,7 @@ services:
       REDIS_LINK_CACHE_TTL_SECONDS: ${REDIS_LINK_CACHE_TTL_SECONDS:-60}
       GEO_API_BASE_URL: ${GEO_API_BASE_URL:-http://ip-api.com/json}
       GEO_LOOKUP_TIMEOUT_MS: ${GEO_LOOKUP_TIMEOUT_MS:-2000}
+      GEO_CACHE_TTL_SECONDS: ${GEO_CACHE_TTL_SECONDS:-21600}
     ports:
       - "${APP_PORT:-3000}:3000"
 

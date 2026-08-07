@@ -49,6 +49,7 @@ lint-and-typecheck-backend:
 test-backend:
   extends: .node_backend
   stage: test
+  coverage: '/Lines\s*:\s*(\d+\.?\d*)%/'
   services:
     - name: postgres:16-alpine
       alias: postgres
@@ -85,7 +86,12 @@ test-backend:
         sleep 2
       done
   script:
-    - npm test
+    - npm run test:coverage
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - backend/coverage/
 
 build-image-backend:
   stage: build
@@ -110,8 +116,84 @@ lint-and-typecheck-frontend:
 test-frontend:
   extends: .node_frontend
   stage: test
+  coverage: '/Lines\s*:\s*(\d+\.?\d*)%/'
   script:
-    - npm test
+    - npm run test:coverage
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - frontend/coverage/
+
+# ---------- e2e ----------
+
+test-e2e:
+  stage: test
+  image: mcr.microsoft.com/playwright:v1.62.1-noble
+  services:
+    - name: postgres:16-alpine
+      alias: postgres
+    - name: redis:7-alpine
+      alias: redis
+  variables:
+    POSTGRES_DB: snaplink_e2e
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: postgres
+    NODE_ENV: development
+    DATABASE_URL: postgres://postgres:postgres@postgres:5432/snaplink_e2e
+    REDIS_URL: redis://redis:6379
+    JWT_SECRET: ci-e2e-secret-at-least-32-characters-long-1234
+    PUBLIC_BASE_URL: http://127.0.0.1:3000
+    BACKEND_PORT: "3000"
+    GEO_API_BASE_URL: http://127.0.0.1:19999/json
+    CI: "true"
+  cache:
+    - key:
+        files: [backend/package-lock.json]
+      paths: [backend/node_modules/]
+    - key:
+        files: [frontend/package-lock.json]
+      paths: [frontend/node_modules/]
+    - key:
+        files: [e2e/package-lock.json]
+      paths: [e2e/node_modules/]
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends postgresql-client curl >/dev/null
+    - |
+      i=0
+      until pg_isready -h postgres -p 5432 -U "$POSTGRES_USER"; do
+        i=$((i + 1))
+        if [ "$i" -ge 30 ]; then
+          echo "Postgres did not become ready in time"
+          exit 1
+        fi
+        sleep 2
+      done
+  script:
+    - (cd backend && npm ci && npm run db:migrate && npm run dev &)
+    - (cd frontend && npm ci && VITE_BACKEND_URL=http://127.0.0.1:3000 npm run dev &)
+    - |
+      echo "Waiting for backend on :3000 ..."
+      i=0
+      until curl -sf http://127.0.0.1:3000/health >/dev/null; do
+        i=$((i + 1))
+        if [ "$i" -ge 30 ]; then echo "backend did not start in time"; exit 1; fi
+        sleep 2
+      done
+    - |
+      echo "Waiting for frontend on :5173 ..."
+      i=0
+      until curl -sf http://127.0.0.1:5173 >/dev/null; do
+        i=$((i + 1))
+        if [ "$i" -ge 30 ]; then echo "frontend did not start in time"; exit 1; fi
+        sleep 2
+      done
+    - cd e2e && npm ci && npm test
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - e2e/playwright-report/
 
 # ---------- deploy ----------
 
@@ -126,7 +208,7 @@ test-frontend:
 #     под которым работает nginx (см. deploy/nginx.conf.example).
 deploy:
   stage: deploy
-  needs: [build-image-backend, lint-and-typecheck-frontend, test-frontend]
+  needs: [build-image-backend, lint-and-typecheck-frontend, test-frontend, test-e2e]
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       when: never
@@ -157,6 +239,7 @@ deploy:
       docker compose -f docker-compose.yml -f docker-compose.prod.yml build
       docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
       docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm backend node dist/db/migrate.js
+      docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm backend node dist/db/verifyMigrations.js
       docker image prune -f
 
       cd "$VPS_PATH/frontend"

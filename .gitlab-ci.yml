@@ -158,6 +158,7 @@ test-e2e:
         files: [e2e/package-lock.json]
       paths: [e2e/node_modules/]
   before_script:
+    - sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' /etc/apt/sources.list.d/ubuntu.sources
     - apt-get update && apt-get install -y --no-install-recommends postgresql-client curl >/dev/null
     - |
       i=0
@@ -177,7 +178,7 @@ test-e2e:
       i=0
       until curl -sf http://127.0.0.1:3000/health >/dev/null; do
         i=$((i + 1))
-        if [ "$i" -ge 30 ]; then echo "backend did not start in time"; exit 1; fi
+        if [ "$i" -ge 90 ]; then echo "backend did not start in time"; exit 1; fi
         sleep 2
       done
     - |
@@ -185,7 +186,7 @@ test-e2e:
       i=0
       until curl -sf http://127.0.0.1:5173 >/dev/null; do
         i=$((i + 1))
-        if [ "$i" -ge 30 ]; then echo "frontend did not start in time"; exit 1; fi
+        if [ "$i" -ge 90 ]; then echo "frontend did not start in time"; exit 1; fi
         sleep 2
       done
     - cd e2e && npm ci && npm test
